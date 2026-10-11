@@ -9,7 +9,7 @@ const app = new Hono().basePath('/make-server-513143ac');
 app.use('*', logger(console.log));
 app.use("/*", cors({
   origin: "*",
-  allowHeaders: ["Content-Type", "Authorization"],
+  allowHeaders: ["Content-Type", "Authorization", "X-Service-Key"],
   allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   exposeHeaders: ["Content-Length"],
   maxAge: 600,
@@ -534,8 +534,33 @@ app.put("/users/:id", async (c) => {
     const id = c.req.param('id');
     const existing = await kv.get(`user:${id}`);
     if (!existing) return c.json({ error: 'Utilizador não encontrado' }, 404);
+
+    // Protecção de privilégios: só o admin altera admins
+    if (profile.role !== 'admin' && existing.role === 'admin') {
+      return c.json({ error: 'Só o administrador pode alterar um administrador' }, 403);
+    }
+
     const updates = await c.req.json();
-    const updated = { ...existing, ...updates, id, updatedAt: new Date().toISOString() };
+
+    // Só o admin altera o papel; validar o valor
+    if (updates.role !== undefined) {
+      if (profile.role !== 'admin') {
+        return c.json({ error: 'Apenas o administrador pode alterar papéis' }, 403);
+      }
+      const validRoles = ['admin', 'director', 'pedagogico', 'professor', 'secretaria'];
+      if (!validRoles.includes(updates.role)) {
+        return c.json({ error: 'Papel inválido' }, 400);
+      }
+    }
+
+    // Whitelist de campos editáveis (evita mass assignment)
+    const editableFields = ['name', 'email', 'role', 'accessCode', 'assignedClasses', 'assignedSubjects', 'active'];
+    const safeUpdates: Record<string, unknown> = {};
+    for (const f of editableFields) {
+      if (f in updates) safeUpdates[f] = updates[f];
+    }
+
+    const updated = { ...existing, ...safeUpdates, id, updatedAt: new Date().toISOString() };
     await kv.set(`user:${id}`, updated);
     return c.json({ success: true, user: updated });
   } catch (error) {
@@ -553,6 +578,14 @@ app.delete("/users/:id", async (c) => {
       return c.json({ error: 'Sem permissão' }, 403);
     }
     const id = c.req.param('id');
+    const target = await kv.get(`user:${id}`);
+    if (profile.id === id) {
+      return c.json({ error: 'Não podes remover a tua própria conta' }, 400);
+    }
+    // Protecção de privilégios: só o admin remove admins
+    if (target && target.role === 'admin' && profile.role !== 'admin') {
+      return c.json({ error: 'Só o administrador pode remover um administrador' }, 403);
+    }
     await kv.del(`user:${id}`);
     const usersList = await kv.get('users:list') || [];
     await kv.set('users:list', usersList.filter((uid: string) => uid !== id));
