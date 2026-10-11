@@ -4,7 +4,7 @@ import { studentsAPI, teachersAPI, classesAPI, subjectsAPI, paymentsAPI, activat
 import {
   Users, BookOpen, School, GraduationCap, TrendingUp,
   DollarSign, CheckCircle2, AlertTriangle, Clock,
-  Calendar, Activity, ChevronRight, Shield
+  Calendar, Activity, ChevronRight, Shield, Percent, Gauge
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { PaymentStats, Teacher } from "../../types/domain";
@@ -175,6 +175,8 @@ export default function Dashboard() {
   }, [load]);
 
   const totalFin = fin.totalPaid + fin.totalPending + fin.totalOverdue || 1;
+  const collectionRate = Math.round((fin.totalPaid / totalFin) * 100);
+  const overdueRate = Math.round((fin.totalOverdue / totalFin) * 100);
   const initials = user?.name?.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase() || "?";
 
   return (
@@ -316,6 +318,8 @@ export default function Dashboard() {
             <KPI icon={Clock}        label="Pendente"       value={fin.totalPending}     color="#fbbf24" loading={loading} sub="MT" />
             <KPI icon={AlertTriangle} label="Em Atraso"     value={fin.totalOverdue}     color="#f87171" loading={loading} sub="MT" />
             <KPI icon={TrendingUp}   label="Receita Mensal" value={fin.monthlyRevenue}   color="#6366f1" loading={loading} sub="MT" />
+            <KPI icon={Percent}      label="Taxa de Cobrança" value={collectionRate}     color="#06b6d4" loading={loading} sub="% do valor total" />
+            <KPI icon={Gauge}        label="Inadimplência"  value={overdueRate}          color="#f472b6" loading={loading} sub="% do valor total" />
           </div>
 
           <div style={{ background: "#0d1117", border: "1px solid #1a2035", borderRadius: 12, padding: "20px 24px", marginBottom: 28 }}>

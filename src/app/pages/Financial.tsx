@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { paymentsAPI } from "../lib/api";
 import { getCurrentUser } from "../lib/auth";
+import { downloadCSV, hoje } from "../lib/csv";
 import { usePayments, useStudents, useClasses, usePaymentStats } from "../hooks";
 import type { Payment } from "../../types/domain";
 import {
   DollarSign, Plus, TrendingUp, Clock, CheckCircle2,
   Search, Bus, Settings, X, Edit2, Trash2, FileText, AlertTriangle,
-  Eye, BarChart2
+  Eye, BarChart2, Download
 } from "lucide-react";
 import Balancete from "./Balancete";
 
@@ -205,6 +206,25 @@ export default function Financial() {
 
   const totalFines = filtered.filter(p => p.status === "overdue").reduce((acc, p) => acc + calcFine(p.amount, calcMonthsOverdue(p.dueDate), finePercent), 0);
 
+  const handleExport = () => {
+    downloadCSV(`financeiro-${hoje()}`, filtered.map(p => {
+      const mo = p.status === "overdue" ? calcMonthsOverdue(p.dueDate) : 0;
+      const fine = calcFine(p.amount, mo, finePercent);
+      return {
+        Aluno: getStudentName(p.studentId),
+        Turma: getClassName(p.studentId),
+        Referência: `${MONTHS[p.month - 1]}/${p.year}`,
+        Vencimento: p.dueDate,
+        "Mensalidade (MT)": p.amount,
+        "Multa (MT)": fine,
+        "Total (MT)": p.amount + fine,
+        Estado: p.status === "paid" ? "Pago" : p.status === "overdue" ? "Atrasado" : "Pendente",
+        "Método": p.paymentMethod || "",
+        "Data Pagamento": p.paidDate || "",
+      };
+    }));
+  };
+
   // Styles
   const S = { fontFamily: "'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif" };
   const inp: React.CSSProperties = { width: "100%", padding: "9px 12px", background: "#111827", border: "1px solid #1a2035", borderRadius: 8, fontSize: 13, color: "#e2e8f0", outline: "none", fontFamily: "inherit" };
@@ -241,6 +261,10 @@ export default function Financial() {
           <button onClick={() => setShowBalancete(true)}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(99,102,241,0.08)", color: "#818cf8", border: "1px solid rgba(99,102,241,0.2)", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <BarChart2 style={{ width: 14, height: 14 }} /> Balancete
+          </button>
+          <button onClick={handleExport} disabled={!filtered.length} title="Exportar para CSV"
+            style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: filtered.length ? "#10b981" : "#4a5568", border: "1px solid #1a2035", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: filtered.length ? "pointer" : "not-allowed" }}>
+            <Download style={{ width: 14, height: 14 }} /> Exportar
           </button>
           {canManage && <>
             <button onClick={() => { setSettingsFine(finePercent); setSettingsTransport(transportFee); setShowSettings(true); }}

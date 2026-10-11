@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useStudents, useClasses } from "../hooks";
 import { studentsAPI } from "../lib/api";
 import { getCurrentUser } from "../lib/auth";
+import { downloadCSV, hoje } from "../lib/csv";
 import type { Student } from "../lib/supabase";
-import { Plus, Search, Edit2, Trash2, Eye, X, Users, RefreshCw } from "lucide-react";
+import { Plus, Search, Edit2, Trash2, Eye, X, Users, RefreshCw, Download } from "lucide-react";
 
 export default function Students() {
   const user = getCurrentUser();
@@ -75,6 +76,17 @@ export default function Students() {
     return matchSearch && matchClass;
   });
 
+  const handleExport = () => {
+    downloadCSV(`alunos-${hoje()}`, filtered.map(s => ({
+      Nome: s.name,
+      "Data de Nascimento": s.birthDate || "",
+      Turma: getClassName(s.classId),
+      Responsável: s.guardian || "",
+      Telefone: s.guardianPhone || "",
+      Endereço: s.address || "",
+    })));
+  };
+
   const inp: React.CSSProperties = {
     width: "100%", padding: "9px 12px",
     background: "#111827", border: "1px solid #1a2035",
@@ -110,6 +122,10 @@ export default function Students() {
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={() => refetch()} style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: "#4a5568", border: "1px solid #1a2035", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <RefreshCw style={{ width: 13, height: 13 }} /> Actualizar
+          </button>
+          <button onClick={handleExport} disabled={!filtered.length} title="Exportar lista para CSV"
+            style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: filtered.length ? "#10b981" : "#4a5568", border: "1px solid #1a2035", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: filtered.length ? "pointer" : "not-allowed" }}>
+            <Download style={{ width: 13, height: 13 }} /> Exportar CSV
           </button>
           {canManage && (
             <button onClick={() => setShowForm(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#6366f1", color: "white", border: "none", padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>

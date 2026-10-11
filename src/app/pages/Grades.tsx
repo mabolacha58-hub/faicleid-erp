@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { getCurrentUser } from "../lib/auth";
 import { gradesAPI } from "../lib/api";
+import { downloadCSV, hoje } from "../lib/csv";
 import { useGrades, useStudents, useClasses, useSubjects } from "../hooks";
 import type { Grade } from "../../types/domain";
-import { Award, Plus, Search, Edit2, Trash2, X, Eye, RefreshCw } from "lucide-react";
+import { Award, Plus, Search, Edit2, Trash2, X, Eye, RefreshCw, Download } from "lucide-react";
 
 const BIMESTRES = [
   { id: 1, nome: "1º Bimestre" },
@@ -52,6 +53,17 @@ export default function Grades() {
   });
 
   const stats = { total: enriched.length, media: enriched.length > 0 ? (enriched.reduce((a, g) => a + (g.grade || 0), 0) / enriched.length).toFixed(1) : "0.0", aprovados: enriched.filter(g => (g.grade || 0) >= NOTA_MIN).length, reprovados: enriched.filter(g => (g.grade || 0) < NOTA_MIN && g.grade).length };
+
+  const handleExport = () => {
+    downloadCSV(`notas-${selectedBimester}bim-${hoje()}`, enriched.map(g => ({
+      Aluno: g.studentName || "",
+      Turma: g.className || "",
+      Disciplina: g.subjectName || "",
+      Bimestre: `${g.bimester}º`,
+      Nota: g.grade ?? "",
+      Situação: (g.grade || 0) >= NOTA_MIN ? "Aprovado" : "Reprovado",
+    })));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,6 +124,10 @@ export default function Grades() {
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={() => refetch()} style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: "#4a5568", border: "1px solid #1a2035", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <RefreshCw style={{ width: 13, height: 13 }} /> Actualizar
+          </button>
+          <button onClick={handleExport} disabled={!enriched.length} title="Exportar notas para CSV"
+            style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: enriched.length ? "#10b981" : "#4a5568", border: "1px solid #1a2035", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: enriched.length ? "pointer" : "not-allowed" }}>
+            <Download style={{ width: 13, height: 13 }} /> Exportar CSV
           </button>
           {canManage && <button onClick={() => setShowForm(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#6366f1", color: "white", border: "none", padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Plus style={{ width: 14, height: 14 }} /> Lançar Nota
