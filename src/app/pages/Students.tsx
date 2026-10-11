@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useStudents, useClasses } from "../hooks";
 import { studentsAPI } from "../lib/api";
 import { getCurrentUser } from "../lib/auth";
-import { downloadCSV, hoje } from "../lib/csv";
+import { downloadCSV, hoje, parseCSV, normKey, normDate } from "../lib/csv";
 import type { Student } from "../lib/supabase";
-import { Plus, Search, Edit2, Trash2, Eye, X, Users, RefreshCw, Download } from "lucide-react";
+import { Plus, Search, Edit2, Trash2, Eye, X, Users, RefreshCw, Download, Upload, FileDown, Loader2 } from "lucide-react";
 
 export default function Students() {
   const user = getCurrentUser();
@@ -20,6 +20,8 @@ export default function Students() {
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<Student | null>(null);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState({
     name: "", birthDate: "", classId: "", guardian: "", guardianPhone: "", address: "",
@@ -87,6 +89,70 @@ export default function Students() {
     })));
   };
 
+  const handleTemplate = () => {
+    const example = classes[0]?.name || "Nome da Turma";
+    downloadCSV("modelo-alunos", [{
+      Nome: "João da Silva",
+      "Data de Nascimento": "2010-05-14",
+      Turma: example,
+      Responsável: "Maria da Silva",
+      Telefone: "+258 84 000 0000",
+      Endereço: "Bairro Central",
+    }], ["Nome", "Data de Nascimento", "Turma", "Responsável", "Telefone", "Endereço"]);
+  };
+
+  const handleImportFile = async (file: File) => {
+    setImporting(true);
+    try {
+      const rows = parseCSV(await file.text());
+      if (rows.length < 2) { alert("Ficheiro vazio ou sem dados (além do cabeçalho)."); return; }
+      const headers = rows[0].map(normKey);
+      const idx = (names: string[]) => headers.findIndex(h => names.includes(h));
+      const iName = idx(["nome", "nome completo", "aluno", "name"]);
+      const iBirth = idx(["data de nascimento", "nascimento", "data de nasc", "birthdate"]);
+      const iClass = idx(["turma", "classe", "class"]);
+      const iGuard = idx(["responsavel", "encarregado", "guardian"]);
+      const iPhone = idx(["telefone", "contacto", "telefone do responsavel", "phone", "telemovel"]);
+      const iAddr = idx(["endereco", "address", "morada"]);
+
+      if (iName < 0 || iClass < 0) {
+        alert("Colunas obrigatórias em falta: 'Nome' e 'Turma'.\nDescarregue o Modelo para ver o formato correto.");
+        return;
+      }
+
+      let ok = 0;
+      const errors: string[] = [];
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        const name = (row[iName] || "").trim();
+        const className = (row[iClass] || "").trim();
+        const cls = classes.find(c => normKey(c.name) === normKey(className));
+        if (!name) { errors.push(`Linha ${r + 1}: nome vazio`); continue; }
+        if (!cls) { errors.push(`Linha ${r + 1}: turma "${className}" não encontrada`); continue; }
+        try {
+          await studentsAPI.create({
+            name,
+            birthDate: iBirth >= 0 ? normDate(row[iBirth]) : "",
+            classId: cls.id,
+            guardian: iGuard >= 0 ? (row[iGuard] || "").trim() : "",
+            guardianPhone: iPhone >= 0 ? (row[iPhone] || "").trim() : "",
+            address: iAddr >= 0 ? (row[iAddr] || "").trim() : "",
+          });
+          ok++;
+        } catch {
+          errors.push(`Linha ${r + 1}: erro ao guardar "${name}"`);
+        }
+      }
+      await refetch();
+      const msg = `Importação concluída: ${ok} aluno(s) criado(s), ${errors.length} falha(s).`;
+      alert(errors.length ? `${msg}\n\n${errors.slice(0, 10).join("\n")}${errors.length > 10 ? `\n... e mais ${errors.length - 10}.` : ""}` : msg);
+    } catch {
+      alert("Não foi possível ler o ficheiro CSV.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const inp: React.CSSProperties = {
     width: "100%", padding: "9px 12px",
     background: "#111827", border: "1px solid #1a2035",
@@ -111,7 +177,7 @@ export default function Students() {
 
   return (
     <div style={{ padding: "28px 32px", maxWidth: 1300, margin: "0 auto", fontFamily: "'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif" }}>
-      <style>{`input:focus, select:focus, textarea:focus { border-color: #6366f1 !important; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }`}</style>
+      <style>{`input:focus, select:focus, textarea:focus { border-color: #6366f1 !important; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 16 }}>
@@ -119,7 +185,7 @@ export default function Students() {
           <h1 style={{ fontSize: 22, fontWeight: 700, color: "#e2e8f0", margin: 0 }}>Alunos</h1>
           <p style={{ fontSize: 12, color: "#4a5568", margin: "4px 0 0" }}>{students.length} alunos registados</p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => refetch()} style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: "#4a5568", border: "1px solid #1a2035", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <RefreshCw style={{ width: 13, height: 13 }} /> Actualizar
           </button>
@@ -127,6 +193,19 @@ export default function Students() {
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: filtered.length ? "#10b981" : "#4a5568", border: "1px solid #1a2035", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: filtered.length ? "pointer" : "not-allowed" }}>
             <Download style={{ width: 13, height: 13 }} /> Exportar CSV
           </button>
+          {canManage && <>
+            <button onClick={handleTemplate} title="Descarregar modelo CSV"
+              style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: "#718096", border: "1px solid #1a2035", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              <FileDown style={{ width: 13, height: 13 }} /> Modelo
+            </button>
+            <button onClick={() => fileRef.current?.click()} disabled={importing} title="Importar alunos de um CSV"
+              style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: "#818cf8", border: "1px solid rgba(99,102,241,0.3)", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: importing ? "wait" : "pointer" }}>
+              {importing ? <Loader2 style={{ width: 13, height: 13, animation: "spin 1s linear infinite" }} /> : <Upload style={{ width: 13, height: 13 }} />}
+              {importing ? "A importar..." : "Importar CSV"}
+            </button>
+            <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: "none" }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ""; }} />
+          </>}
           {canManage && (
             <button onClick={() => setShowForm(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#6366f1", color: "white", border: "none", padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
               <Plus style={{ width: 14, height: 14 }} /> Novo Aluno
