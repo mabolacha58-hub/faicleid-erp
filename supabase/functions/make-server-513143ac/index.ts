@@ -80,6 +80,44 @@ const ROLES = {
 
 const hasRole = (role: string, allowed: string[]) => allowed.includes(role);
 
+// ==================== UTILITÁRIOS DE PEDIDO ====================
+
+// deno-lint-ignore no-explicit-any
+const getClientIp = (c: any): string => {
+  const xff =
+    c.req.header('x-forwarded-for') ||
+    c.req.header('cf-connecting-ip') ||
+    c.req.header('x-real-ip') ||
+    '';
+  return String(xff).split(',')[0].trim() || 'unknown';
+};
+
+// Limite simples baseado em KV (por identificador)
+const rateLimit = async (id: string, limit: number, windowSec: number): Promise<boolean> => {
+  try {
+    const key = `ratelimit:${id}`;
+    const now = Date.now();
+    const rec = await kv.get(key);
+    if (!rec || now - rec.windowStart > windowSec * 1000) {
+      await kv.set(key, { windowStart: now, count: 1 });
+      return true;
+    }
+    if (rec.count >= limit) return false;
+    await kv.set(key, { windowStart: rec.windowStart, count: rec.count + 1 });
+    return true;
+  } catch (e) {
+    console.warn('[RATE-LIMIT] Falha ao verificar limite:', e);
+    return true; // não bloquear em caso de falha do limiter
+  }
+};
+
+// Resposta de erro genérica (não expõe detalhes internos)
+// deno-lint-ignore no-explicit-any
+const serverError = (c: any, error: unknown) => {
+  console.error('[ERROR]', error);
+  return c.json({ error: 'Erro interno do servidor' }, 500);
+};
+
 // ==================== AUTH HELPER ====================
 
 const getAuthUser = async (authHeader: string | null) => {
@@ -108,6 +146,7 @@ const auditLog = async (
   module: string,
   details: string,
   targetId?: string,
+  ip?: string,
 ) => {
   try {
     const id = crypto.randomUUID();
@@ -121,7 +160,7 @@ const auditLog = async (
       details,     // descrição legível do que foi feito
       targetId,    // ID do registo afectado (opcional)
       timestamp: new Date().toISOString(),
-      ip: 'N/A',
+      ip: ip || 'N/A',
     };
     await kv.set(`audit:${id}`, entry);
 
@@ -268,7 +307,7 @@ app.post("/activation-keys", async (c) => {
 
     return c.json({ success: true, key: { ...record, hash: keyHash } });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -286,7 +325,7 @@ app.get("/activation-keys", async (c) => {
       .filter(Boolean);
     return c.json({ keys });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -302,17 +341,21 @@ app.delete("/activation-keys/:id", async (c) => {
     await removeFromActivationList(hash);
     return c.json({ success: true });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
 // Verificar se chave é válida (público — usado no Activate)
 app.post("/activation-keys/verify", async (c) => {
   try {
+    if (!(await rateLimit(`verify:${getClientIp(c)}`, 20, 600))) {
+      return c.json({ valid: false, error: 'Demasiadas tentativas. Tenta novamente mais tarde.' }, 429);
+    }
     const { activationKey } = await c.req.json();
-    if (!activationKey) return c.json({ valid: false, error: 'Chave em falta' }, 400);
+    const cleanKey = typeof activationKey === 'string' ? activationKey.trim() : '';
+    if (!cleanKey) return c.json({ valid: false, error: 'Chave em falta' }, 400);
 
-    const keyHash = await hashKey(activationKey);
+    const keyHash = await hashKey(cleanKey);
     const keyData = await kv.get(`activation:${keyHash}`);
 
     if (!keyData) return c.json({ valid: false, error: 'Chave inválida' }, 400);
@@ -327,17 +370,21 @@ app.post("/activation-keys/verify", async (c) => {
     // A marcação acontece no /activation-keys/activate
     return c.json({ valid: true, school: keyData.school });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
 // Activar o sistema com a chave (marca como usada e guarda licença)
 app.post("/activation-keys/activate", async (c) => {
   try {
+    if (!(await rateLimit(`activate:${getClientIp(c)}`, 10, 600))) {
+      return c.json({ success: false, error: 'Demasiadas tentativas. Tenta novamente mais tarde.' }, 429);
+    }
     const { activationKey } = await c.req.json();
-    if (!activationKey) return c.json({ success: false, error: 'Chave em falta' }, 400);
+    const cleanKey = typeof activationKey === 'string' ? activationKey.trim() : '';
+    if (!cleanKey) return c.json({ success: false, error: 'Chave em falta' }, 400);
 
-    const keyHash = await hashKey(activationKey);
+    const keyHash = await hashKey(cleanKey);
     const keyData = await kv.get(`activation:${keyHash}`);
 
     if (!keyData) return c.json({ success: false, error: 'Chave inválida' }, 400);
@@ -357,7 +404,7 @@ app.post("/activation-keys/activate", async (c) => {
 
     return c.json({ success: true, school: keyData.school });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -394,7 +441,7 @@ app.get("/license", async (c) => {
       expired,
     });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -402,6 +449,9 @@ app.get("/license", async (c) => {
 
 app.post("/signup", async (c) => {
   try {
+    if (!(await rateLimit(`signup:${getClientIp(c)}`, 10, 600))) {
+      return c.json({ error: 'Demasiadas tentativas. Tenta novamente mais tarde.' }, 429);
+    }
     const { email, password, name, role, activationKey } = await c.req.json();
     if (!email || !password || !name || !role) {
       return c.json({ error: 'Campos obrigatórios em falta' }, 400);
@@ -421,8 +471,8 @@ app.post("/signup", async (c) => {
       const license = await kv.get('license:active');
       if (!license) {
         // Fallback: aceitar activationKey directamente no signup (compatibilidade)
-        if (activationKey) {
-          const keyHash = await hashKey(activationKey);
+        if (typeof activationKey === 'string' && activationKey.trim()) {
+          const keyHash = await hashKey(activationKey.trim());
           const keyData = await kv.get(`activation:${keyHash}`);
           if (!keyData) return c.json({ error: 'Chave de activação inválida' }, 400);
           if (keyData.used) return c.json({ error: 'Chave de activação já utilizada' }, 400);
@@ -480,11 +530,11 @@ app.post("/signup", async (c) => {
     usersList.push(data.user.id);
     await kv.set('users:list', usersList);
 
-    await auditLog(data.user.id, name, role, 'CREATE', 'users', `Nova conta criada: ${name} (${role}) — ${email}`);
+    await auditLog(data.user.id, name, role, 'CREATE', 'users', `Nova conta criada: ${name} (${role}) — ${email}`, undefined, getClientIp(c));
 
     return c.json({ success: true, user: profile });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -495,11 +545,11 @@ app.get("/me", async (c) => {
     const profile = await getProfile(user.id);
     // ── Audit: Login (quando /me é chamado após login)
     if (profile) {
-      await auditLog(profile.id, profile.name, profile.role, 'LOGIN', 'auth', `Sessão iniciada por ${profile.name} (${profile.role})`);
+      await auditLog(profile.id, profile.name, profile.role, 'LOGIN', 'auth', `Sessão iniciada por ${profile.name} (${profile.role})`, undefined, getClientIp(c));
     }
     return c.json({ user: profile || user });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -518,7 +568,7 @@ app.get("/users", async (c) => {
     const users = await kv.mget(usersList.map((id: string) => `user:${id}`));
     return c.json({ users: users.filter(Boolean) });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -564,7 +614,7 @@ app.put("/users/:id", async (c) => {
     await kv.set(`user:${id}`, updated);
     return c.json({ success: true, user: updated });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -591,7 +641,7 @@ app.delete("/users/:id", async (c) => {
     await kv.set('users:list', usersList.filter((uid: string) => uid !== id));
     return c.json({ success: true });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -613,10 +663,10 @@ app.post("/students", async (c) => {
     list.push(id);
     await kv.set('students:list', list);
     // ── Audit
-    await auditLog(profile.id, profile.name, profile.role, 'CREATE', 'students', `Aluno criado: ${student.name}`, id);
+    await auditLog(profile.id, profile.name, profile.role, 'CREATE', 'students', `Aluno criado: ${student.name}`, id, getClientIp(c));
     return c.json({ success: true, student: newStudent });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -640,7 +690,7 @@ app.get("/students", async (c) => {
 
     return c.json({ students });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -665,7 +715,7 @@ app.get("/students/:id", async (c) => {
 
     return c.json({ student });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -684,7 +734,7 @@ app.put("/students/:id", async (c) => {
     await kv.set(`student:${id}`, updated);
     return c.json({ success: true, student: updated });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -702,7 +752,7 @@ app.delete("/students/:id", async (c) => {
     await kv.set('students:list', list.filter((sid: string) => sid !== id));
     return c.json({ success: true });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -725,7 +775,7 @@ app.post("/teachers", async (c) => {
     await kv.set('teachers:list', list);
     return c.json({ success: true, teacher: newTeacher });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -741,7 +791,7 @@ app.get("/teachers", async (c) => {
     const teachers = await kv.mget(list.map((id: string) => `teacher:${id}`));
     return c.json({ teachers: teachers.filter(Boolean) });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -760,7 +810,7 @@ app.put("/teachers/:id", async (c) => {
     await kv.set(`teacher:${id}`, updated);
     return c.json({ success: true, teacher: updated });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -778,7 +828,7 @@ app.delete("/teachers/:id", async (c) => {
     await kv.set('teachers:list', list.filter((tid: string) => tid !== id));
     return c.json({ success: true });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -801,7 +851,7 @@ app.post("/classes", async (c) => {
     await kv.set('classes:list', list);
     return c.json({ success: true, class: newClass });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -825,7 +875,7 @@ app.get("/classes", async (c) => {
 
     return c.json({ classes });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -844,7 +894,7 @@ app.put("/classes/:id", async (c) => {
     await kv.set(`class:${id}`, updated);
     return c.json({ success: true, class: updated });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -862,7 +912,7 @@ app.delete("/classes/:id", async (c) => {
     await kv.set('classes:list', list.filter((cid: string) => cid !== id));
     return c.json({ success: true });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -885,7 +935,7 @@ app.post("/subjects", async (c) => {
     await kv.set('subjects:list', list);
     return c.json({ success: true, subject: newSubject });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -909,7 +959,7 @@ app.get("/subjects", async (c) => {
 
     return c.json({ subjects });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -928,7 +978,7 @@ app.put("/subjects/:id", async (c) => {
     await kv.set(`subject:${id}`, updated);
     return c.json({ success: true, subject: updated });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -946,7 +996,7 @@ app.delete("/subjects/:id", async (c) => {
     await kv.set('subjects:list', list.filter((sid: string) => sid !== id));
     return c.json({ success: true });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -972,7 +1022,7 @@ app.get("/grades", async (c) => {
 
     return c.json({ grades });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1002,7 +1052,7 @@ app.post("/grades", async (c) => {
     await kv.set(gradeKey, gradeRecord);
     return c.json({ success: true, grade: gradeRecord });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1030,7 +1080,7 @@ app.delete("/grades", async (c) => {
     await kv.del(gradeKey);
     return c.json({ success: true });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1053,7 +1103,7 @@ app.get("/grades/student/:studentId", async (c) => {
 
     return c.json({ grades });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1084,7 +1134,7 @@ app.post("/attendance", async (c) => {
     await kv.set(attendanceKey, attendanceRecord);
     return c.json({ success: true, attendance: attendanceRecord });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1100,7 +1150,7 @@ app.get("/attendance/student/:studentId", async (c) => {
     const attendance = attendanceData.map((item: any) => item.value);
     return c.json({ attendance });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1132,7 +1182,7 @@ app.post("/payments", async (c) => {
     await kv.set('payments:list', list);
     return c.json({ success: true, payment: newPayment });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1158,7 +1208,7 @@ app.get("/payments", async (c) => {
 
     return c.json({ payments: updatedPayments });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1206,7 +1256,7 @@ app.get("/payments/stats", async (c) => {
 
     return c.json(stats);
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1224,7 +1274,7 @@ app.get("/payments/student/:studentId", async (c) => {
     const payments = all.filter((p: any) => p.studentId === studentId);
     return c.json({ payments });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1243,7 +1293,7 @@ app.put("/payments/:id", async (c) => {
     await kv.set(`payment:${id}`, updated);
     return c.json({ success: true, payment: updated });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1261,7 +1311,7 @@ app.delete("/payments/:id", async (c) => {
     await kv.set('payments:list', list.filter((pid: string) => pid !== id));
     return c.json({ success: true });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1281,7 +1331,7 @@ app.post("/funcionarios", async (c) => {
     list.push(id);
     await kv.set('funcionarios:list', list);
     return c.json({ success: true, funcionario });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 app.get("/funcionarios", async (c) => {
@@ -1293,7 +1343,7 @@ app.get("/funcionarios", async (c) => {
     const list = await kv.get('funcionarios:list') || [];
     const funcionarios = (await kv.mget(list.map((id: string) => `funcionario:${id}`))).filter(Boolean);
     return c.json({ funcionarios });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 app.get("/funcionarios/:id", async (c) => {
@@ -1305,7 +1355,7 @@ app.get("/funcionarios/:id", async (c) => {
     const funcionario = await kv.get(`funcionario:${c.req.param('id')}`);
     if (!funcionario) return c.json({ error: 'Não encontrado' }, 404);
     return c.json({ funcionario });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 app.put("/funcionarios/:id", async (c) => {
@@ -1320,7 +1370,7 @@ app.put("/funcionarios/:id", async (c) => {
     const updated = { ...existing, ...await c.req.json(), id, updatedAt: new Date().toISOString() };
     await kv.set(`funcionario:${id}`, updated);
     return c.json({ success: true, funcionario: updated });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 app.delete("/funcionarios/:id", async (c) => {
@@ -1334,7 +1384,7 @@ app.delete("/funcionarios/:id", async (c) => {
     const list = await kv.get('funcionarios:list') || [];
     await kv.set('funcionarios:list', list.filter((fid: string) => fid !== id));
     return c.json({ success: true });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 // ==================== FOLHA DE PAGAMENTO ====================
@@ -1362,7 +1412,7 @@ app.post("/folha-pagamento", async (c) => {
     list.push(id);
     await kv.set('folha:list', list);
     return c.json({ success: true, pagamento });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 app.get("/folha-pagamento", async (c) => {
@@ -1374,7 +1424,7 @@ app.get("/folha-pagamento", async (c) => {
     const list = await kv.get('folha:list') || [];
     const pagamentos = (await kv.mget(list.map((id: string) => `folha:${id}`))).filter(Boolean);
     return c.json({ pagamentos });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 app.get("/folha-pagamento/funcionario/:funcionarioId", async (c) => {
@@ -1390,7 +1440,7 @@ app.get("/folha-pagamento/funcionario/:funcionarioId", async (c) => {
       p.funcionarioId === funcionarioId || p.funcionario_id === funcionarioId
     );
     return c.json({ pagamentos });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 app.get("/folha-pagamento/check", async (c) => {
@@ -1405,7 +1455,7 @@ app.get("/folha-pagamento/check", async (c) => {
       p.mes == mes && p.ano == ano
     );
     return c.json({ exists });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 app.get("/folha-pagamento/periodo", async (c) => {
@@ -1419,7 +1469,7 @@ app.get("/folha-pagamento/periodo", async (c) => {
     const all = (await kv.mget(list.map((id: string) => `folha:${id}`))).filter(Boolean);
     const pagamentos = all.filter((p: any) => p.mes == mes && p.ano == ano);
     return c.json({ pagamentos });
-  } catch (error) { return c.json({ error: String(error) }, 500); }
+  } catch (error) { return serverError(c, error); }
 });
 
 // ==================== AUDIT LOG — CONSULTA ====================
@@ -1447,7 +1497,7 @@ app.get("/audit", async (c) => {
 
     return c.json({ logs: filtered.slice(0, parseInt(limit)), total: filtered.length });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1464,7 +1514,7 @@ app.get("/audit/me", async (c) => {
       .slice(0, 50);
     return c.json({ logs: myLogs });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
@@ -1564,7 +1614,7 @@ app.post("/reset", async (c) => {
       }
     });
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return serverError(c, error);
   }
 });
 
