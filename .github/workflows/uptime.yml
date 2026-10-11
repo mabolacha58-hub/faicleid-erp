@@ -1,0 +1,63 @@
+name: Uptime
+
+on:
+  schedule:
+    # A cada 15 minutos
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Verificar servicos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar endpoints
+        id: check
+        run: |
+          fail=0
+          check() {
+            name="$1"; url="$2"
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$url" || echo "000")
+            echo "$name -> HTTP $code ($url)"
+            if [ "$code" -lt 200 ] || [ "$code" -ge 400 ]; then fail=1; fi
+          }
+          check "App"    "https://faicleid-erp.vercel.app"
+          check "Painel" "https://dev-panel-azure.vercel.app"
+          check "API"    "https://tsznvdytuzvbfcnujgbg.supabase.co/functions/v1/make-server-513143ac/health"
+          echo "fail=$fail" >> "$GITHUB_OUTPUT"
+          if [ "$fail" = "1" ]; then
+            echo "::error::Um ou mais servicos estao em baixo."
+          fi
+
+      - name: Abrir/atualizar alerta
+        if: steps.check.outputs.fail == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: "ALERTA: Servico em baixo (uptime)"
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing=$(gh issue list --repo "${{ github.repository }}" --state open --json number,title \
+            --jq ".[] | select(.title==\"$TITLE\") | .number" | head -n1)
+          body="Deteccao automatica de falha de uptime em $(date -u). Ver run: $run_url"
+          if [ -z "$existing" ]; then
+            gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$body"
+          else
+            gh issue comment "$existing" --repo "${{ github.repository }}" --body "$body"
+          fi
+
+      - name: Fechar alerta (tudo ok)
+        if: steps.check.outputs.fail == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: "ALERTA: Servico em baixo (uptime)"
+        run: |
+          existing=$(gh issue list --repo "${{ github.repository }}" --state open --json number,title \
+            --jq ".[] | select(.title==\"$TITLE\") | .number" | head -n1)
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "${{ github.repository }}" \
+              --comment "Servicos recuperados em $(date -u)."
+          fi
