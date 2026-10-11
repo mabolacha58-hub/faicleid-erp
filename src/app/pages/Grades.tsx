@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { getCurrentUser } from "../lib/auth";
-import { gradesAPI } from "../lib/api";
+import { gradesAPI, attendanceAPI } from "../lib/api";
 import { downloadCSV, hoje } from "../lib/csv";
+import { printBoletins } from "../lib/boletim";
+import type { BoletimData, BoletimRow } from "../lib/boletim";
 import { useGrades, useStudents, useClasses, useSubjects } from "../hooks";
 import type { Grade } from "../../types/domain";
-import { Award, Plus, Search, Edit2, Trash2, X, Eye, RefreshCw, Download } from "lucide-react";
+import { Award, Plus, Search, Edit2, Trash2, X, Eye, RefreshCw, Download, Printer, Loader2 } from "lucide-react";
 
 const BIMESTRES = [
   { id: 1, nome: "1º Bimestre" },
@@ -38,6 +40,7 @@ export default function Grades() {
   const [showForm, setShowForm] = useState(false);
   const [editingGrade, setEditingGrade] = useState<EnrichedGrade | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<EnrichedGrade | null>(null);
+  const [printing, setPrinting] = useState(false);
   const [formData, setFormData] = useState({ studentId: "", subjectId: "", bimester: 1, grade: "" });
 
   const enriched: EnrichedGrade[] = grades.map(g => ({
@@ -63,6 +66,55 @@ export default function Grades() {
       Nota: g.grade ?? "",
       Situação: (g.grade || 0) >= NOTA_MIN ? "Aprovado" : "Reprovado",
     })));
+  };
+
+  const handlePrintClass = async () => {
+    const targetStudents = students.filter(s =>
+      selectedClass === "all" ? grades.some(g => g.studentId === s.id) : s.classId === selectedClass
+    );
+    if (!targetStudents.length) { alert("Nenhum aluno com notas para imprimir."); return; }
+    setPrinting(true);
+    try {
+      const list: BoletimData[] = await Promise.all(targetStudents.map(async (s) => {
+        const sGrades = grades.filter(g => g.studentId === s.id);
+        const subjectIds = Array.from(new Set(sGrades.map(g => g.subjectId)));
+        const rows: BoletimRow[] = subjectIds.map(sid => {
+          const gvals = ([1, 2, 3, 4] as const).map(b =>
+            sGrades.find(g => g.subjectId === sid && g.bimester === b)?.grade ?? null
+          );
+          const vals = gvals.filter((v): v is number => v !== null);
+          const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+          return {
+            subject: subjects.find(x => x.id === sid)?.name || "—",
+            grades: gvals,
+            average: avg,
+            status: avg === null ? "—" : avg >= NOTA_MIN ? "Aprovado" : "Reprovado",
+          };
+        });
+        let att: { present: number; total: number; rate: number | null } = { present: 0, total: 0, rate: null };
+        try {
+          const ar = await attendanceAPI.getByStudent(s.id);
+          const recs = ar.attendance;
+          if (recs.length) {
+            const present = recs.filter(a => a.present).length;
+            att = { present, total: recs.length, rate: (present / recs.length) * 100 };
+          }
+        } catch { /* frequencia indisponivel */ }
+        return {
+          student: { name: s.name, birthDate: s.birthDate, guardian: s.guardian, guardianPhone: s.guardianPhone },
+          className: classes.find(c => c.id === s.classId)?.name || "—",
+          rows,
+          attendance: att,
+          notaMin: NOTA_MIN,
+        };
+      }));
+      const title = selectedClass === "all"
+        ? "Boletins"
+        : `Boletins — ${classes.find(c => c.id === selectedClass)?.name || ""}`;
+      printBoletins(list, title);
+    } finally {
+      setPrinting(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -110,7 +162,7 @@ export default function Grades() {
 
   return (
     <div style={{ padding: "28px 32px", maxWidth: 1300, margin: "0 auto", fontFamily: "'IBM Plex Sans','Segoe UI',system-ui,sans-serif" }}>
-      <style>{`input:focus,select:focus,textarea:focus{border-color:#6366f1!important;box-shadow:0 0 0 3px rgba(99,102,241,0.1)}`}</style>
+      <style>{`input:focus,select:focus,textarea:focus{border-color:#6366f1!important;box-shadow:0 0 0 3px rgba(99,102,241,0.1)}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 16 }}>
         <div>
@@ -128,6 +180,11 @@ export default function Grades() {
           <button onClick={handleExport} disabled={!enriched.length} title="Exportar notas para CSV"
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#111827", color: enriched.length ? "#10b981" : "#4a5568", border: "1px solid #1a2035", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: enriched.length ? "pointer" : "not-allowed" }}>
             <Download style={{ width: 13, height: 13 }} /> Exportar CSV
+          </button>
+          <button onClick={handlePrintClass} disabled={printing} title="Imprimir boletins dos alunos filtrados"
+            style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(99,102,241,0.08)", color: "#818cf8", border: "1px solid rgba(99,102,241,0.2)", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: printing ? "wait" : "pointer" }}>
+            {printing ? <Loader2 style={{ width: 13, height: 13, animation: "spin 1s linear infinite" }} /> : <Printer style={{ width: 13, height: 13 }} />}
+            {printing ? "A gerar..." : "Boletins"}
           </button>
           {canManage && <button onClick={() => setShowForm(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#6366f1", color: "white", border: "none", padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Plus style={{ width: 14, height: 14 }} /> Lançar Nota

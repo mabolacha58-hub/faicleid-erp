@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { studentsAPI, gradesAPI, attendanceAPI, subjectsAPI, classesAPI } from "../lib/api";
+import { printBoletins } from "../lib/boletim";
+import type { BoletimData, BoletimRow } from "../lib/boletim";
 import type { Student, Grade, Attendance, Subject, Class } from "../lib/supabase";
-import { FileText, ArrowLeft, TrendingUp, Calendar } from "lucide-react";
+import { FileText, ArrowLeft, TrendingUp, Calendar, Printer, Award, Loader2 } from "lucide-react";
+
+const NOTA_MIN = 10;
 
 export default function StudentReport() {
   const { studentId } = useParams<{ studentId: string }>();
@@ -27,7 +31,7 @@ export default function StudentReport() {
       setGrades(gradesRes.grades);
       setAttendance(attendanceRes.attendance);
       setSubjects(subjectsRes.subjects);
-      
+
       const cls = classesRes.classes.find((c) => c.id === studentRes.student.classId);
       setStudentClass(cls || null);
     } catch (error) {
@@ -38,258 +42,214 @@ export default function StudentReport() {
   }, [studentId]);
 
   useEffect(() => {
-    if (studentId) {
-      loadStudentData();
-    }
+    if (studentId) loadStudentData();
   }, [studentId, loadStudentData]);
 
-  const getSubjectName = (subjectId: string) => {
-    return subjects.find((s) => s.id === subjectId)?.name || "N/A";
-  };
+  const getSubjectName = (subjectId: string) => subjects.find((s) => s.id === subjectId)?.name || "N/A";
 
-  const getGradesBySubject = (subjectId: string) => {
-    return [1, 2, 3, 4].map((bimester) => {
+  const getGradesBySubject = (subjectId: string): (number | null)[] =>
+    [1, 2, 3, 4].map((bimester) => {
       const grade = grades.find((g) => g.subjectId === subjectId && g.bimester === bimester);
       return grade?.grade ?? null;
     });
+
+  const calculateAverage = (subjectId: string): number | null => {
+    const values = getGradesBySubject(subjectId).filter((g): g is number => g !== null);
+    if (!values.length) return null;
+    return values.reduce((a, b) => a + b, 0) / values.length;
   };
 
-  const calculateAverage = (subjectId: string) => {
-    const subjectGrades = getGradesBySubject(subjectId).filter((g) => g !== null) as number[];
-    if (subjectGrades.length === 0) return null;
-    return (subjectGrades.reduce((a, b) => a + b, 0) / subjectGrades.length).toFixed(1);
+  const calculateAttendanceRate = (): number | null => {
+    if (!attendance.length) return null;
+    return (attendance.filter((a) => a.present).length / attendance.length) * 100;
   };
 
-  const calculateAttendanceRate = () => {
-    if (attendance.length === 0) return null;
-    const present = attendance.filter((a) => a.present).length;
-    return ((present / attendance.length) * 100).toFixed(1);
-  };
-
-  // Get unique subjects from grades
   const uniqueSubjects = Array.from(new Set(grades.map((g) => g.subjectId)));
+
+  const handlePrint = () => {
+    if (!student) return;
+    const rows: BoletimRow[] = uniqueSubjects.map((subjectId) => {
+      const avg = calculateAverage(subjectId);
+      return {
+        subject: getSubjectName(subjectId),
+        grades: getGradesBySubject(subjectId),
+        average: avg,
+        status: avg === null ? "—" : avg >= NOTA_MIN ? "Aprovado" : "Reprovado",
+      };
+    });
+    const data: BoletimData = {
+      student: {
+        name: student.name,
+        birthDate: student.birthDate,
+        guardian: student.guardian,
+        guardianPhone: student.guardianPhone,
+      },
+      className: studentClass?.name || "—",
+      rows,
+      attendance: {
+        present: attendance.filter((a) => a.present).length,
+        total: attendance.length,
+        rate: calculateAttendanceRate(),
+      },
+      notaMin: NOTA_MIN,
+    };
+    printBoletins([data], `Boletim — ${student.name}`);
+  };
+
+  const S = { fontFamily: "'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif" };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-lg text-gray-600">Carregando boletim...</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300, ...S }}>
+        <div style={{ textAlign: "center" }}>
+          <Loader2 style={{ width: 32, height: 32, color: "#6366f1", animation: "spin 1s linear infinite", margin: "0 auto 12px" }} />
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          <p style={{ color: "#4a5568", fontSize: 13 }}>A carregar boletim...</p>
+        </div>
       </div>
     );
   }
 
   if (!student) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <p className="text-lg text-gray-600">Aluno não encontrado</p>
-          <a href="/students" className="text-indigo-600 hover:text-indigo-700 mt-4 inline-block">
-            Voltar para Alunos
-          </a>
-        </div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "50vh", ...S, color: "#4a5568" }}>
+        <FileText style={{ width: 40, height: 40, opacity: 0.3, marginBottom: 12 }} />
+        <p style={{ fontSize: 16, fontWeight: 600, color: "#718096" }}>Aluno não encontrado</p>
+        <a href="/students" style={{ color: "#818cf8", marginTop: 12, textDecoration: "none", fontSize: 13 }}>Voltar para Alunos</a>
       </div>
     );
   }
 
+  const attendRate = calculateAttendanceRate();
+  const card: React.CSSProperties = { background: "#0d1117", border: "1px solid #1a2035", borderRadius: 12, padding: "18px 20px" };
+  const kpi: React.CSSProperties = { background: "#0d1117", border: "1px solid #1a2035", borderRadius: 10, padding: "16px 18px" };
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="mb-6">
-        <a
-          href="/students"
-          className="inline-flex items-center space-x-2 text-indigo-600 hover:text-indigo-700 mb-4"
-        >
-          <ArrowLeft className="h-5 w-5" />
-          <span>Voltar para Alunos</span>
-        </a>
-      </div>
+    <div style={{ padding: "28px 32px", maxWidth: 1100, margin: "0 auto", ...S }}>
+      <a href="/students" style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#818cf8", textDecoration: "none", fontSize: 13, marginBottom: 16 }}>
+        <ArrowLeft style={{ width: 15, height: 15 }} /> Voltar para Alunos
+      </a>
 
-      {/* Student Info Card */}
-      <div className="bg-white rounded-lg shadow p-6 mb-6">
-        <div className="flex items-start justify-between">
+      {/* Cabeçalho */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ width: 52, height: 52, borderRadius: 12, background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <FileText style={{ width: 24, height: 24, color: "#818cf8" }} />
+          </div>
           <div>
-            <div className="flex items-center space-x-3 mb-4">
-              <div className="bg-indigo-100 p-3 rounded-full">
-                <FileText className="h-8 w-8 text-indigo-600" />
-              </div>
-              <div>
-                <h1 className="text-3xl font-bold text-gray-900">{student.name}</h1>
-                <p className="text-gray-600">Boletim Escolar</p>
-              </div>
+            <h1 style={{ fontSize: 22, fontWeight: 700, color: "#e2e8f0", margin: 0 }}>{student.name}</h1>
+            <p style={{ fontSize: 12, color: "#4a5568", margin: "3px 0 0" }}>Boletim Escolar · {studentClass?.name || "Sem turma"}</p>
+          </div>
+        </div>
+        <button onClick={handlePrint}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: "#6366f1", color: "white", border: "none", padding: "9px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          <Printer style={{ width: 15, height: 15 }} /> Imprimir / PDF
+        </button>
+      </div>
+
+      {/* Info do aluno */}
+      <div style={{ ...card, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
+          {[
+            { l: "Data de Nascimento", v: student.birthDate ? new Date(student.birthDate).toLocaleDateString("pt-MZ") : "—" },
+            { l: "Responsável", v: student.guardian || "—" },
+            { l: "Telefone", v: student.guardianPhone || "—" },
+            { l: "Turma", v: studentClass?.name || "—" },
+          ].map(({ l, v }) => (
+            <div key={l}>
+              <p style={{ fontSize: 10, color: "#4a5568", textTransform: "uppercase", letterSpacing: 1, fontWeight: 600, margin: "0 0 4px" }}>{l}</p>
+              <p style={{ fontSize: 13, color: "#e2e8f0", margin: 0, fontWeight: 500 }}>{v}</p>
             </div>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="text-gray-600">Turma:</span>
-                <span className="ml-2 font-medium text-gray-900">
-                  {studentClass?.name || "N/A"}
-                </span>
-              </div>
-              <div>
-                <span className="text-gray-600">Data de Nascimento:</span>
-                <span className="ml-2 font-medium text-gray-900">
-                  {new Date(student.birthDate).toLocaleDateString('pt-BR')}
-                </span>
-              </div>
-              <div>
-                <span className="text-gray-600">Responsável:</span>
-                <span className="ml-2 font-medium text-gray-900">{student.guardian}</span>
-              </div>
-              {student.guardianPhone && (
-                <div>
-                  <span className="text-gray-600">Telefone:</span>
-                  <span className="ml-2 font-medium text-gray-900">{student.guardianPhone}</span>
-                </div>
-              )}
-            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 16 }}>
+        <div style={kpi}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <TrendingUp style={{ width: 20, height: 20, color: "#6366f1" }} />
+            <div><p style={{ fontSize: 10, color: "#4a5568", textTransform: "uppercase", letterSpacing: 1, margin: 0 }}>Disciplinas</p>
+              <p style={{ fontSize: 24, fontWeight: 700, color: "#e2e8f0", margin: 0, fontFamily: "'IBM Plex Mono',monospace" }}>{uniqueSubjects.length}</p></div>
+          </div>
+        </div>
+        <div style={kpi}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Calendar style={{ width: 20, height: 20, color: "#10b981" }} />
+            <div><p style={{ fontSize: 10, color: "#4a5568", textTransform: "uppercase", letterSpacing: 1, margin: 0 }}>Frequência</p>
+              <p style={{ fontSize: 24, fontWeight: 700, color: "#e2e8f0", margin: 0, fontFamily: "'IBM Plex Mono',monospace" }}>{attendRate === null ? "N/A" : `${attendRate.toFixed(1)}%`}</p></div>
+          </div>
+        </div>
+        <div style={kpi}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Award style={{ width: 20, height: 20, color: "#f472b6" }} />
+            <div><p style={{ fontSize: 10, color: "#4a5568", textTransform: "uppercase", letterSpacing: 1, margin: 0 }}>Total de Aulas</p>
+              <p style={{ fontSize: 24, fontWeight: 700, color: "#e2e8f0", margin: 0, fontFamily: "'IBM Plex Mono',monospace" }}>{attendance.length}</p></div>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        {/* Stats Cards */}
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg shadow p-6 border border-blue-200">
-          <div className="flex items-center space-x-3">
-            <TrendingUp className="h-8 w-8 text-blue-600" />
-            <div>
-              <p className="text-sm text-blue-700 font-medium">Disciplinas</p>
-              <p className="text-2xl font-bold text-blue-900">{uniqueSubjects.length}</p>
-            </div>
-          </div>
+      {/* Tabela de notas */}
+      <div style={{ ...card, padding: 0, overflow: "hidden", marginBottom: 16 }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid #1a2035" }}>
+          <h2 style={{ fontSize: 15, fontWeight: 700, color: "#e2e8f0", margin: 0 }}>Notas Bimestrais</h2>
+          <p style={{ fontSize: 11, color: "#4a5568", margin: "3px 0 0" }}>Aprovação mínima: {NOTA_MIN} valores</p>
         </div>
-
-        <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg shadow p-6 border border-green-200">
-          <div className="flex items-center space-x-3">
-            <Calendar className="h-8 w-8 text-green-600" />
-            <div>
-              <p className="text-sm text-green-700 font-medium">Frequência</p>
-              <p className="text-2xl font-bold text-green-900">
-                {calculateAttendanceRate() ? `${calculateAttendanceRate()}%` : "N/A"}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg shadow p-6 border border-purple-200">
-          <div className="flex items-center space-x-3">
-            <FileText className="h-8 w-8 text-purple-600" />
-            <div>
-              <p className="text-sm text-purple-700 font-medium">Total de Aulas</p>
-              <p className="text-2xl font-bold text-purple-900">{attendance.length}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Grades Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
-        <div className="p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-4">Notas Bimestrais</h2>
-          
-          {uniqueSubjects.length === 0 ? (
-            <p className="text-center py-8 text-gray-500">
-              Nenhuma nota lançada ainda
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Disciplina
-                    </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      1º Bim
-                    </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      2º Bim
-                    </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      3º Bim
-                    </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      4º Bim
-                    </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Média
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {uniqueSubjects.map((subjectId) => {
-                    const subjectGrades = getGradesBySubject(subjectId);
-                    const average = calculateAverage(subjectId);
-                    const averageNum = average ? parseFloat(average) : null;
-                    const status = averageNum !== null && averageNum >= 6 ? "approved" : averageNum !== null ? "failed" : "pending";
-
-                    return (
-                      <tr key={subjectId}>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                          {getSubjectName(subjectId)}
-                        </td>
-                        {subjectGrades.map((grade, idx) => (
-                          <td key={idx} className="px-6 py-4 whitespace-nowrap text-center text-sm">
-                            {grade !== null ? (
-                              <span className={`font-semibold ${grade >= 6 ? "text-green-600" : "text-red-600"}`}>
-                                {grade.toFixed(1)}
-                              </span>
-                            ) : (
-                              <span className="text-gray-400">-</span>
-                            )}
-                          </td>
-                        ))}
-                        <td className="px-6 py-4 whitespace-nowrap text-center">
-                          {average !== null ? (
-                            <span
-                              className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${
-                                status === "approved"
-                                  ? "bg-green-100 text-green-800"
-                                  : status === "failed"
-                                  ? "bg-red-100 text-red-800"
-                                  : "bg-gray-100 text-gray-800"
-                              }`}
-                            >
-                              {average}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">-</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Attendance Summary */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">Resumo de Frequência</h2>
-        
-        {attendance.length === 0 ? (
-          <p className="text-center py-8 text-gray-500">
-            Nenhuma frequência registrada
-          </p>
+        {uniqueSubjects.length === 0 ? (
+          <p style={{ textAlign: "center", padding: 40, color: "#4a5568", fontSize: 13 }}>Nenhuma nota lançada ainda</p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-              <p className="text-sm text-green-700 font-medium">Presenças</p>
-              <p className="text-3xl font-bold text-green-900 mt-2">
-                {attendance.filter((a) => a.present).length}
-              </p>
-            </div>
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <p className="text-sm text-red-700 font-medium">Faltas</p>
-              <p className="text-3xl font-bold text-red-900 mt-2">
-                {attendance.filter((a) => !a.present).length}
-              </p>
-            </div>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <p className="text-sm text-blue-700 font-medium">Taxa de Presença</p>
-              <p className="text-3xl font-bold text-blue-900 mt-2">
-                {calculateAttendanceRate()}%
-              </p>
-            </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #1a2035" }}>
+                  {["Disciplina", "1º Bim", "2º Bim", "3º Bim", "4º Bim", "Média"].map((h, i) => (
+                    <th key={h} style={{ padding: "12px 16px", textAlign: i === 0 ? "left" : "center", fontSize: 10, fontWeight: 600, color: "#4a5568", textTransform: "uppercase", letterSpacing: 1 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {uniqueSubjects.map((subjectId) => {
+                  const subjectGrades = getGradesBySubject(subjectId);
+                  const avg = calculateAverage(subjectId);
+                  return (
+                    <tr key={subjectId} style={{ borderBottom: "1px solid #0f1520" }}>
+                      <td style={{ padding: "13px 16px", fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>{getSubjectName(subjectId)}</td>
+                      {subjectGrades.map((g, idx) => (
+                        <td key={idx} style={{ padding: "13px 16px", textAlign: "center", fontSize: 13 }}>
+                          {g === null ? <span style={{ color: "#2d3748" }}>—</span>
+                            : <span style={{ color: g >= NOTA_MIN ? "#10b981" : "#f87171", fontWeight: 600, fontFamily: "'IBM Plex Mono',monospace" }}>{g.toFixed(1)}</span>}
+                        </td>
+                      ))}
+                      <td style={{ padding: "13px 16px", textAlign: "center" }}>
+                        {avg === null ? <span style={{ color: "#2d3748" }}>—</span>
+                          : <span style={{ background: avg >= NOTA_MIN ? "rgba(16,185,129,0.1)" : "rgba(248,113,113,0.1)", color: avg >= NOTA_MIN ? "#10b981" : "#f87171", border: `1px solid ${avg >= NOTA_MIN ? "rgba(16,185,129,0.3)" : "rgba(248,113,113,0.3)"}`, borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 700, fontFamily: "'IBM Plex Mono',monospace" }}>{avg.toFixed(1)}</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Frequência */}
+      <div style={card}>
+        <h2 style={{ fontSize: 15, fontWeight: 700, color: "#e2e8f0", margin: "0 0 14px" }}>Resumo de Frequência</h2>
+        {attendance.length === 0 ? (
+          <p style={{ textAlign: "center", padding: 24, color: "#4a5568", fontSize: 13 }}>Nenhuma frequência registada</p>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+            {[
+              { l: "Presenças", v: attendance.filter((a) => a.present).length, c: "#10b981" },
+              { l: "Faltas", v: attendance.filter((a) => !a.present).length, c: "#f87171" },
+              { l: "Taxa de Presença", v: `${attendRate!.toFixed(1)}%`, c: "#06b6d4" },
+            ].map(({ l, v, c }) => (
+              <div key={l} style={{ background: "#111827", border: "1px solid #1a2035", borderRadius: 8, padding: 14 }}>
+                <p style={{ fontSize: 10, color: "#4a5568", textTransform: "uppercase", letterSpacing: 1, margin: "0 0 6px" }}>{l}</p>
+                <p style={{ fontSize: 22, fontWeight: 700, color: c, margin: 0, fontFamily: "'IBM Plex Mono',monospace" }}>{v}</p>
+              </div>
+            ))}
           </div>
         )}
       </div>
