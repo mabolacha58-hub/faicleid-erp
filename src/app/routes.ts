@@ -3,7 +3,6 @@ import Root from "./pages/Root";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Activate from "./pages/Activate";
-import TestConnection from "./pages/TestConnection";
 import Dashboard from "./pages/Dashboard";
 import Students from "./pages/Students";
 import Teachers from "./pages/Teachers";
@@ -28,7 +27,6 @@ export const router = createBrowserRouter([
       { index: true, Component: Login },
       { path: "activate", Component: Activate },
       { path: "signup", Component: Signup },
-      { path: "test", Component: TestConnection },
       { path: "dashboard", Component: Dashboard },
       { path: "students", Component: Students },
       { path: "teachers", Component: Teachers },
