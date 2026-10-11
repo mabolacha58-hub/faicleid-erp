@@ -1,0 +1,42 @@
+name: KV Backup
+
+on:
+  schedule:
+    # Diariamente as 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    name: Backup do KV Store
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar secrets
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" ]; then
+            echo "::error::Faltam os secrets SUPABASE_URL e/ou SUPABASE_SERVICE_ROLE_KEY no repositorio."
+            exit 1
+          fi
+
+      - name: Exportar KV
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          ts=$(date -u +%Y%m%d-%H%M%S)
+          file="kv-backup-$ts.json"
+          curl -sS --fail \
+            "$SUPABASE_URL/rest/v1/kv_store_513143ac?select=key,value" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -o "$file"
+          count=$(grep -o '"key"' "$file" | wc -l)
+          echo "Ficheiro: $file ($(wc -c < "$file") bytes, ~$count registos)"
+
+      - name: Guardar artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: kv-backup
+          path: kv-backup-*.json
+          retention-days: 90
+          if-no-files-found: error
