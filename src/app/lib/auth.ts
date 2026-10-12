@@ -8,6 +8,7 @@ export interface AuthUser {
   role: UserRole;
   assignedClasses?: string[];
   assignedSubjects?: string[];
+  studentIds?: string[];
   accessCode?: string;
 }
 
@@ -178,6 +179,7 @@ export const isDirector = (user: AuthUser | null) => user?.role === 'director';
 export const isPedagogico = (user: AuthUser | null) => user?.role === 'pedagogico';
 export const isProfessor = (user: AuthUser | null) => user?.role === 'professor';
 export const isSecretaria = (user: AuthUser | null) => user?.role === 'secretaria';
+export const isEncarregado = (user: AuthUser | null) => user?.role === 'encarregado';
 
 export const canManageFinancial = (user: AuthUser | null) => user?.role === 'admin';
 export const canViewFinancial = (user: AuthUser | null) =>
@@ -220,6 +222,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   pedagogico: 'Pedagógico',
   professor: 'Professor',
   secretaria: 'Secretaria',
+  encarregado: 'Encarregado',
 };
 
 export const ROLE_COLORS: Record<UserRole, { bg: string; color: string; border: string }> = {
@@ -228,6 +231,7 @@ export const ROLE_COLORS: Record<UserRole, { bg: string; color: string; border: 
   pedagogico: { bg: '#ecfdf5', color: '#059669', border: '#6ee7b7' },
   professor:  { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
   secretaria: { bg: '#fdf2f8', color: '#db2777', border: '#fbcfe8' },
+  encarregado:{ bg: '#fff7ed', color: '#ea580c', border: '#fed7aa' },
 };
 
 export async function updateUserProfile(updates: Partial<AuthUser>): Promise<void> {

@@ -160,6 +160,16 @@ export const paymentsAPI = {
   getStats: () => apiCall<PaymentStats>('/payments/stats'),
 };
 
+export const portalAPI = {
+  get: () => apiCall<{ students: Array<{
+    student: Student;
+    className: string;
+    grades: any[];
+    attendance: any[];
+    payments: any[];
+  }> }>('/portal'),
+};
+
 export const funcionariosAPI = {
   getAll: () => apiCall<{ funcionarios: Funcionario[] }>('/funcionarios'),
   getById: (id: string) => apiCall<{ funcionario: Funcionario }>(`/funcionarios/${id}`),

@@ -25,9 +25,10 @@ const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
   pedagogico: "Visualiza dados pedagógicos",
   professor:  "Lança notas da sua turma",
   secretaria: "Visualiza financeiro",
+  encarregado: "Visualiza alunos ligados",
 };
 
-const CREATABLE_ROLES: UserRole[] = ["director", "pedagogico", "professor", "secretaria"];
+const CREATABLE_ROLES: UserRole[] = ["director", "pedagogico", "professor", "secretaria", "encarregado"];
 
 export default function UsersPage() {
   const user = getCurrentUser();

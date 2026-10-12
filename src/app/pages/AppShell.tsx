@@ -10,7 +10,7 @@ import { useNavigate, useLocation } from "react-router";
 import { Briefcase } from "lucide-react";
 
 const NAV = [
-  { label: "Dashboard", icon: LayoutDashboard, href: "/dashboard", roles: ["admin","director","pedagogico","professor","secretaria"] },
+  { label: "Portal", icon: LayoutDashboard, href: "/portal", roles: ["encarregado"] },
   { label: "Utilizadores", icon: Users, href: "/users", roles: ["admin","director"] },
   { label: "Chaves Activação", icon: Key, href: "/activation-keys", roles: ["admin"] },
   { label: "Registo Actividade", icon: Shield, href: "/audit", roles: ["admin"] },
@@ -35,7 +35,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const visibleNav = NAV.filter(n => n.roles.includes(role));
   const isActive = (href: string) => location.pathname === href || location.pathname.startsWith(href + "/");
 
-  const handleLogout = () => { signOut(); navigate("/login"); };
+  const handleLogout = () => { signOut(); navigate("/"); };
 
   const initials = user?.name?.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "?";
 

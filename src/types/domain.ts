@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'director' | 'pedagogico' | 'professor' | 'secretaria';
+export type UserRole = 'admin' | 'director' | 'pedagogico' | 'professor' | 'secretaria' | 'encarregado';
 
 export interface User {
   id: string;
@@ -7,6 +7,7 @@ export interface User {
   role: UserRole;
   assignedClasses?: string[];
   assignedSubjects?: string[];
+  studentIds?: string[];
   accessCode?: string;
   createdAt?: string;
 }

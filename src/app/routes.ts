@@ -18,6 +18,7 @@ import Profile from "./pages/Profile";
 import Pessoal from "./pages/Pessoal";
 import ActivationKeys from "./pages/ActivationKeys";
 import NotFound from "./pages/NotFound";
+import GuardianPortal from "./pages/GuardianPortal";
 
 export const router = createBrowserRouter([
   {
@@ -41,6 +42,7 @@ export const router = createBrowserRouter([
       { path: "audit", Component: AuditLog },
       { path: "activation-keys", Component: ActivationKeys },
       { path: "profile", Component: Profile },
+      { path: "portal", Component: GuardianPortal },
       { path: "*", Component: NotFound },
     ],
   },

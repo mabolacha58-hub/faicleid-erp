@@ -14,16 +14,9 @@ export default function Root() {
   const checkedRef = useRef(false);
 
   const checkAndRedirect = useCallback(async () => {
-    const user = getCurrentUser();
-    const token = localStorage.getItem("accessToken");
-
-    if (location.pathname === "/activate") {
-      setReady(true);
-      return;
-    }
-
-    // Se não há token e não é rota pública -> login
-    if (!user || !token) {
+    const u = getCurrentUser();
+    const accessToken = localStorage.getItem("accessToken");
+    if (!u || !accessToken) {
       if (!isPublic) navigate("/", { replace: true });
       setReady(true);
       return;
@@ -31,7 +24,7 @@ export default function Root() {
 
     // Se é rota pública mas tem token -> dashboard
     if (isPublic) {
-      navigate("/dashboard", { replace: true });
+      navigate(u.role === 'encarregado' ? "/portal" : "/dashboard", { replace: true });
       setReady(true);
       return;
     }
@@ -58,6 +51,13 @@ export default function Root() {
         setReady(true);
         return;
       }
+    }
+
+    // Encarregado sempre para portal
+    if (u.role === 'encarregado' && location.pathname !== "/portal" && location.pathname !== "/profile") {
+      navigate("/portal", { replace: true });
+      setReady(true);
+      return;
     }
 
     setReady(true);

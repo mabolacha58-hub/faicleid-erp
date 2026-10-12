@@ -33,7 +33,7 @@ export default function Login() {
       storeAuth(user, accessToken);
 
       setLoadingMessage("Redirecionando...");
-      navigate("/dashboard");
+      navigate(user.role === 'encarregado' ? "/portal" : "/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Email ou senha incorrectos");
     } finally {

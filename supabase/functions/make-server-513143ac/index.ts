@@ -457,7 +457,7 @@ app.post("/signup", async (c) => {
       return c.json({ error: 'Campos obrigatórios em falta' }, 400);
     }
 
-    const validRoles = ['admin', 'director', 'pedagogico', 'professor', 'secretaria'];
+    const validRoles = ['admin', 'director', 'pedagogico', 'professor', 'secretaria', 'encarregado'];
     if (!validRoles.includes(role)) {
       return c.json({ error: 'Papel inválido' }, 400);
     }
@@ -524,6 +524,10 @@ app.post("/signup", async (c) => {
       profile.accessCode = await generateAccessCode();
       profile.assignedClasses = [];
       profile.assignedSubjects = [];
+    }
+
+    if (role === 'encarregado') {
+      profile.studentIds = [];
     }
 
     await kv.set(`user:${data.user.id}`, profile);
@@ -597,14 +601,14 @@ app.put("/users/:id", async (c) => {
       if (profile.role !== 'admin') {
         return c.json({ error: 'Apenas o administrador pode alterar papéis' }, 403);
       }
-      const validRoles = ['admin', 'director', 'pedagogico', 'professor', 'secretaria'];
+      const validRoles = ['admin', 'director', 'pedagogico', 'professor', 'secretaria', 'encarregado'];
       if (!validRoles.includes(updates.role)) {
         return c.json({ error: 'Papel inválido' }, 400);
       }
     }
 
     // Whitelist de campos editáveis (evita mass assignment)
-    const editableFields = ['name', 'email', 'role', 'accessCode', 'assignedClasses', 'assignedSubjects', 'active'];
+    const editableFields = ['name', 'email', 'role', 'accessCode', 'assignedClasses', 'assignedSubjects', 'studentIds', 'active'];
     const safeUpdates: Record<string, unknown> = {};
     for (const f of editableFields) {
       if (f in updates) safeUpdates[f] = updates[f];
@@ -1147,7 +1151,7 @@ app.get("/attendance/student/:studentId", async (c) => {
       return c.json({ error: 'Sem permissão' }, 403);
     }
     const attendanceData = await kv.getByPrefix(`attendance:${c.req.param('studentId')}:`);
-    const attendance = attendanceData.map((item: any) => item.value);
+    const attendance = attendanceData.map((item: any) => item?.value ?? item);
     return c.json({ attendance });
   } catch (error) {
     return serverError(c, error);
@@ -1310,6 +1314,64 @@ app.delete("/payments/:id", async (c) => {
     const list = await kv.get('payments:list') || [];
     await kv.set('payments:list', list.filter((pid: string) => pid !== id));
     return c.json({ success: true });
+  } catch (error) {
+    return serverError(c, error);
+  }
+});
+
+// ==================== PORTAL DO ENCARREGADO ====================
+// Devolve APENAS os dados dos alunos ligados ao encarregado autenticado.
+// Scoping é feito no servidor: o encarregado nunca recebe dados de outros alunos.
+app.get("/portal", async (c) => {
+  try {
+    const user = await getAuthUser(c.req.header('Authorization'));
+    if (!user) return c.json({ error: 'Não autorizado' }, 401);
+    const profile = await getProfile(user.id);
+    if (!profile || !hasRole(profile.role, ['encarregado', 'admin', 'director'])) {
+      return c.json({ error: 'Sem permissão' }, 403);
+    }
+
+    const studentIds: string[] = Array.isArray(profile.studentIds) ? profile.studentIds : [];
+    if (!studentIds.length) return c.json({ students: [] });
+
+    // Lookup tables para resolver nomes de turma
+    const classList = await kv.get('classes:list') || [];
+    const classes = (await kv.mget(classList.map((id: string) => `class:${id}`))).filter(Boolean);
+    const className = (id: string) => classes.find((cls: any) => cls.id === id)?.name || '—';
+
+    // Pagamentos (uma leitura para todos os alunos)
+    const paymentsList = await kv.get('payments:list') || [];
+    const allPayments = (await kv.mget(paymentsList.map((id: string) => `payment:${id}`))).filter(Boolean);
+    const today = new Date();
+
+    const result = [];
+    for (const sid of studentIds) {
+      const student = await kv.get(`student:${sid}`);
+      if (!student) continue;
+
+      const grades = await kv.getByPrefix(`grade:${sid}:`);
+
+      const attendanceRaw = await kv.getByPrefix(`attendance:${sid}:`);
+      const attendance = attendanceRaw.map((item: any) => item?.value ?? item);
+
+      const payments = allPayments
+        .filter((p: any) => p?.studentId === sid)
+        .map((p: any) =>
+          p.status !== 'paid' && p.dueDate && new Date(p.dueDate) < today
+            ? { ...p, status: 'overdue' }
+            : p
+        );
+
+      result.push({
+        student,
+        className: className(student.classId),
+        grades,
+        attendance,
+        payments,
+      });
+    }
+
+    return c.json({ students: result });
   } catch (error) {
     return serverError(c, error);
   }
